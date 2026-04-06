@@ -51,3 +51,7 @@ docker_volumes/
 *.tmp
 *.temp
 *.bak
+
+
+# Wallet files
+config/regtest/wallets.json
