@@ -1,0 +1,22 @@
+{
+  "name": "p2tr-and-p2mr",
+  "version": "1.0.0",
+  "description": "Bitcoin transaction format examples: P2TR (Pay to Taproot) and P2MR (Pay to Merkle Root)",
+  "type": "module",
+  "scripts": {
+    "p2pkh": "node example/p2pkh.mjs",
+    "p2sh": "node example/p2sh.mjs",
+    "p2tr": "node p2tr/index.mjs",
+    "p2mr": "node p2mr/index.mjs"
+  },
+  "keywords": ["bitcoin", "taproot", "merkle-root", "p2tr", "p2mr"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bitcoinjs-lib": "^6.1.6",
+    "bip39": "^3.1.0",
+    "bip32": "^3.1.0",
+    "tiny-secp256k1": "^2.2.3",
+    "ecpair": "^2.1.0"
+  }
+}
