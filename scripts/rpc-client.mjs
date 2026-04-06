@@ -24,8 +24,8 @@ export class BitcoinRpcClient {
    */
   async callDocker(method, params = []) {
     try {
-      // For methods with complex JSON parameters, use a JSON-RPC request file
-      if (params.length > 0 && (typeof params[0] === 'object' || method === 'scantxoutset')) {
+      // For methods where first param is an object, use a JSON-RPC request file
+      if (params.length > 0 && typeof params[0] === 'object') {
         return this.callDockerViaJsonFile(method, params);
       }
 

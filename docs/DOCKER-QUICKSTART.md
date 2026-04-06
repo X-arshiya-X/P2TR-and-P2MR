@@ -30,28 +30,28 @@ That's it! You now have a private Bitcoin regtest blockchain running.
 ### Fund a Wallet
 ```bash
 # Get a miner address
-MINER_ADDR=$(docker exec bitcoin-regtest bitcoin-cli -regtest getnewaddress)
+MINER_ADDR=$(docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin -rpcwallet=default getnewaddress)
 
 # Generate 50 blocks to earn 50 BTC
-docker exec bitcoin-regtest bitcoin-cli -regtest generatetoaddress 50 $MINER_ADDR
+docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin -rpcwallet=default generatetoaddress 50 $MINER_ADDR
 
 # Send 10 BTC to your address
-docker exec bitcoin-regtest bitcoin-cli -regtest sendtoaddress <your-address> 10
+docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin -rpcwallet=default sendtoaddress <your-address> 10
 
 # Generate 1 block to confirm
-docker exec bitcoin-regtest bitcoin-cli -regtest generatetoaddress 1 $MINER_ADDR
+docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin -rpcwallet=default generatetoaddress 1 $MINER_ADDR
 ```
 
 ### Check Status
 ```bash
 # Block height
-docker exec bitcoin-regtest bitcoin-cli -regtest getblockcount
+docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin getblockcount
 
 # Wallet balance
-docker exec bitcoin-regtest bitcoin-cli -regtest getbalance
+docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin -rpcwallet=default getbalance
 
 # List addresses
-docker exec bitcoin-regtest bitcoin-cli -regtest listreceivedbyaddress 0 true
+docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin -rpcwallet=default listreceivedbyaddress 0 true
 ```
 
 ### Reset Blockchain
@@ -101,7 +101,7 @@ ports:
 ### Need to access Bitcoin CLI
 ```bash
 docker exec -it bitcoin-regtest bash
-bitcoin-cli -regtest getblockcount
+bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin getblockcount
 ```
 
 ## Files Overview

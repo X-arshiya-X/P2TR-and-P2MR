@@ -92,15 +92,15 @@ class RpcDataLayer extends DataLayer {
 
   async getUtxos(address) {
     try {
-      // For regtest with wallet, get all unspent and filter by address
-      const allUnspent = await this.rpc.call('listunspent', [0, 999999]);
-      const filtered = allUnspent.filter(u => u.address === address);
-      
-      return filtered.map(u => ({
+      // Use scantxoutset to find UTXOs for any address (including external/mnemonic-derived)
+      const result = await this.rpc.call('scantxoutset', ['start', [`addr(${address})`]]);
+      if (!result || !result.unspents) return [];
+
+      return result.unspents.map(u => ({
         txid: u.txid,
         vout: u.vout,
         value: BigInt(Math.floor(u.amount * 100000000)),
-        height: u.confirmations
+        height: u.height
       }));
     } catch (error) {
       console.error(`Error fetching UTXOs for ${address}:`, error.message);
