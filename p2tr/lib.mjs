@@ -43,6 +43,41 @@ async function jget(path) {
 }
 
 /**
+ * Select UTXOs from RPC client (for regtest)
+ * @param {Object} rpc – Bitcoin RPC client
+ * @param {string} address – Bitcoin address to select from
+ * @param {bigint} amount – Satoshis to send
+ * @param {string} feeSelection – Fee tier (not used for regtest, uses fixed 1 sat/vB)
+ * @returns {Promise<{utxos: Array, total: bigint, fee: bigint}>} Selected UTXOs and calculated fee
+ */
+async function selectUtxosRpc(rpc, address, amount) {
+    // Get all unspent outputs and filter by address
+    const allUnspent = await rpc.call('listunspent', [0, 999999]);
+    const utxos = allUnspent
+        .filter(u => u.address === address)
+        .map(u => ({
+            txid: u.txid,
+            vout: u.vout,
+            value: BigInt(Math.floor(u.amount * 100000000))
+        }))
+        .sort((a, b) => (a.value < b.value ? 1 : -1));
+    
+    // Use fixed 1 sat/vB for regtest
+    let total = 0n;
+    let fee = 0n;
+    let index = 0;
+    do {
+        if (index >= utxos.length) throw new Error("Not enough funds");
+        const utxo = utxos[index++];
+        total += utxo.value;
+        const size = 10 + 58 * (index + 1) + 31 * 2;
+        fee = BigInt(size); // 1 sat/vB
+    } while (total < (amount + fee));
+
+    return { utxos: utxos.slice(0, index), total, fee };
+}
+
+/**
  * Select UTXOs from address using greedy algorithm (largest first)
  * Estimates transaction size and calculates fees automatically
  * @param {string} mempool – Mempool API base URL
@@ -104,11 +139,11 @@ class TaprootKeyPathWallet {
     /**
      * Create a P2TR key-path wallet from mnemonic
      * @param {bitcoin.Network} network – Bitcoin network (mainnet/testnet/regtest)
-     * @param {string} mempool – Mempool API base URL
+     * @param {string|Object} mempoolOrRpc – Mempool API base URL (string) or RPC client (object)
      * @param {string|string[]} mnemonic – BIP-39 mnemonic (space-separated string or word array)
      * @param {number} accountNumber – BIP-44 account index (0-based)
      */
-    constructor(network, mempool, mnemonic, accountNumber) {
+    constructor(network, mempoolOrRpc, mnemonic, accountNumber) {
         // Derive HD node from BIP-39 mnemonic
         const phrase = Array.isArray(mnemonic) ? mnemonic.join(" ") : mnemonic;
         const seed = bip39.mnemonicToSeedSync(phrase);
@@ -135,7 +170,9 @@ class TaprootKeyPathWallet {
         });
         
         this.network = network;
-        this.mempool = mempool;
+        this.isRpc = typeof mempoolOrRpc === 'object';
+        this.mempool = this.isRpc ? null : mempoolOrRpc;
+        this.rpc = this.isRpc ? mempoolOrRpc : null;
         this.address = pay.address;
         this.publicKey = node.publicKey;
         this.privateKey = node.privateKey;
@@ -167,7 +204,9 @@ class TaprootKeyPathWallet {
      * @returns {Promise<string>} Unsigned PSBT hex
      */
     async createTransaction(toAddress, amount, feeSelection = 'halfHourFee') {
-        const { utxos, total, fee } = await selectUtxos(this.mempool, this.address, amount, feeSelection);
+        const { utxos, total, fee } = this.isRpc
+            ? await selectUtxosRpc(this.rpc, this.address, amount)
+            : await selectUtxos(this.mempool, this.address, amount, feeSelection);
     
         // Create PSBT (Partially Signed Bitcoin Transaction)
         const psbt = new bitcoin.Psbt({ network: this.network });
@@ -219,11 +258,11 @@ class TaprootScriptPathWallet {
     /**
      * Create a P2TR script-path wallet from mnemonic
      * @param {bitcoin.Network} network – Bitcoin network
-     * @param {string} mempool – Mempool API base URL
+     * @param {string|Object} mempoolOrRpc – Mempool API base URL (string) or RPC client (object)
      * @param {string|string[]} mnemonic – BIP-39 mnemonic
      * @param {number} accountNumber – BIP-44 account index
      */
-    constructor(network, mempool, mnemonic, accountNumber) {
+    constructor(network, mempoolOrRpc, mnemonic, accountNumber) {
         // Derive HD node (same as key-path)
         const phrase = Array.isArray(mnemonic) ? mnemonic.join(" ") : mnemonic;
         const seed = bip39.mnemonicToSeedSync(phrase);
@@ -257,7 +296,9 @@ class TaprootScriptPathWallet {
         });
         
         this.network = network;
-        this.mempool = mempool;
+        this.isRpc = typeof mempoolOrRpc === 'object';
+        this.mempool = this.isRpc ? null : mempoolOrRpc;
+        this.rpc = this.isRpc ? mempoolOrRpc : null;
         this.address = taproot.address;
         this.publicKey = node.publicKey;
         this.privateKey = node.privateKey;
@@ -291,7 +332,9 @@ class TaprootScriptPathWallet {
      * @returns {Promise<string>} Unsigned PSBT hex
      */
     async createTransaction(toAddress, amount, feeSelection = 'halfHourFee') {
-        const { utxos, total, fee } = await selectUtxos(this.mempool, this.address, amount, feeSelection);
+        const { utxos, total, fee } = this.isRpc
+            ? await selectUtxosRpc(this.rpc, this.address, amount)
+            : await selectUtxos(this.mempool, this.address, amount, feeSelection);
     
         // Create PSBT
         const psbt = new bitcoin.Psbt({ network: this.network });
@@ -437,10 +480,10 @@ class CustomTaprootScriptWallet {
 // ─── BitcoinClient ────────────────────────────────────────────────────────────
 
 /**
- * Main entry point for Bitcoin operations on testnet4
+ * Main entry point for Bitcoin operations on testnet4 or regtest
  *
  * Responsibilities:
- *   • Manage network config + mempool API connection
+ *   • Manage network config + mempool API or RPC connection
  *   • Factory methods to create wallets
  *   • Query balance and UTXOs for addresses
  */
@@ -449,11 +492,13 @@ export class BitcoinClient {
     /**
      * Create a Bitcoin client
      * @param {bitcoin.Network} network – e.g. bitcoin.networks.testnet or bitcoin.networks.regtest
-     * @param {string} mempool – Base URL of mempool.space-compatible API
+     * @param {string|Object} mempoolOrRpc – Base URL of mempool.space-compatible API or RPC client object
      */
-    constructor(network, mempool) {
+    constructor(network, mempoolOrRpc) {
         this.network = network;
-        this.mempool = mempool;
+        this.isRpc = typeof mempoolOrRpc === 'object';
+        this.mempool = this.isRpc ? null : mempoolOrRpc;
+        this.rpc = this.isRpc ? mempoolOrRpc : null;
     }
   
     /**
@@ -463,7 +508,8 @@ export class BitcoinClient {
      * @returns {TaprootKeyPathWallet}
      */
     getTaprootKeyPathWallet(mnemonic, accountNumber) {
-        return new TaprootKeyPathWallet(this.network, this.mempool, mnemonic, accountNumber);
+        const dataLayer = this.isRpc ? this.rpc : this.mempool;
+        return new TaprootKeyPathWallet(this.network, dataLayer, mnemonic, accountNumber);
     }
 
     /**
@@ -473,7 +519,8 @@ export class BitcoinClient {
      * @returns {TaprootScriptPathWallet}
      */
     getTaprootScriptPathWallet(mnemonic, accountNumber) {
-        return new TaprootScriptPathWallet(this.network, this.mempool, mnemonic, accountNumber);
+        const dataLayer = this.isRpc ? this.rpc : this.mempool;
+        return new TaprootScriptPathWallet(this.network, dataLayer, mnemonic, accountNumber);
     }
     /**
      * Create a P2TR wallet with a custom tap-script
@@ -490,8 +537,27 @@ export class BitcoinClient {
      * @param {string} address – Bitcoin address
      * @returns {Promise<Array>} Array of UTXO objects {txid, vout, value, status}
      */
-    getUtxos(address) {
-        return jget(`${this.mempool}/address/${address}/utxo`);
+    async getUtxos(address) {
+        if (this.isRpc) {
+            try {
+                // Try listunspent (for addresses in the wallet)
+                const allUnspent = await this.rpc.call('listunspent', [0, 999999]);
+                const filtered = allUnspent.filter(u => u.address === address);
+                if (filtered.length > 0) {
+                    return filtered.map(u => ({
+                        txid: u.txid,
+                        vout: u.vout,
+                        value: BigInt(Math.floor(u.amount * 100000000))
+                    }));
+                }
+                return [];
+            } catch (e) {
+                console.error(`Error fetching UTXOs for ${address}:`, e.message);
+                return [];
+            }
+        } else {
+            return jget(`${this.mempool}/address/${address}/utxo`);
+        }
     }
 
     /**
@@ -500,7 +566,11 @@ export class BitcoinClient {
      * @returns {Promise<Object>} Transaction data including inputs/outputs
      */
     async getTx(txid) {
-        return jget(`${this.mempool}/tx/${txid}`);
+        if (this.isRpc) {
+            return this.rpc.call('getrawtransaction', [txid, true]);
+        } else {
+            return jget(`${this.mempool}/tx/${txid}`);
+        }
     }
 
     /**
@@ -509,8 +579,12 @@ export class BitcoinClient {
      * @returns {Promise<number>} Fee rate in sat/vB
      */
     async getFeeRate(target = 1) {
-        const data = await jget(`${this.mempool}/v1/fees/recommended`);
-        return data.fastestFee ?? data.halfHourFee ?? 2;
+        if (this.isRpc) {
+            return 1; // Fixed rate for regtest
+        } else {
+            const data = await jget(`${this.mempool}/v1/fees/recommended`);
+            return data.fastestFee ?? data.halfHourFee ?? 2;
+        }
     }
   
     /**
@@ -521,5 +595,23 @@ export class BitcoinClient {
     async getBalance(address) {
         const utxos = await this.getUtxos(address);
         return Number(utxos.reduce((acc, u) => acc + BigInt(u.value), 0n)) / 100000000;
+    }
+
+    /**
+     * Send a raw transaction to the network
+     * @param {string} txHex – Raw transaction hex
+     * @returns {Promise<string>} Transaction ID
+     */
+    async sendTransaction(txHex) {
+        if (this.isRpc) {
+            return this.rpc.call('sendrawtransaction', [txHex]);
+        } else {
+            const response = await fetch(`${this.mempool}/tx`, {
+                method: 'POST',
+                headers: { 'content-type': 'text/plain' },
+                body: txHex
+            });
+            return response.text();
+        }
     }
 }

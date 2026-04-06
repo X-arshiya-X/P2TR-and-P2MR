@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * p2tr.mjs – Pay-to-Taproot (P2TR, BIP-341) demo on Bitcoin Testnet 4
+ * p2tr.mjs – Pay-to-Taproot (P2TR, BIP-341) demo on Bitcoin Regtest
  *
  * P2TR is the native taproot spending mechanism with two paths:
  *
@@ -32,19 +32,17 @@
  *   1. Key-Path Spend: account0 → account1  (most private, schnorr signature)
  *   2. Script-Path Spend: hash-lock example (anyone with preimage can spend)
  *
- * To actually broadcast a transaction, uncomment the sendTransaction lines.
+ * Transactions are broadcast to the local regtest blockchain.
  */
 
 import { readFile } from "node:fs/promises";
 import * as bitcoin from 'bitcoinjs-lib';
 import { BitcoinClient } from "./lib.mjs";
+import { createRpcClient } from "../scripts/rpc-client.mjs";
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
-const network = bitcoin.networks.testnet;
-const mempool = "https://mempool.space/testnet4/api";
-
-const client = new BitcoinClient(network, mempool);
+const network = bitcoin.networks.regtest;
 
 // ─── Load Mnemonic ─────────────────────────────────────────────────────────────
 
@@ -54,6 +52,12 @@ if (!process.argv[2]) {
 }
 
 const mnemonic = JSON.parse(await readFile(process.argv[2]));
+
+// ─── Initialize RPC Client ────────────────────────────────────────────────────
+
+console.log("🚀 Connecting to Bitcoin regtest via RPC...\n");
+const rpc = await createRpcClient();
+const client = new BitcoinClient(network, rpc);
 
 // ─── 1. Key-Path Spend  ────────────────────────────────────────────────────────
 //
@@ -81,7 +85,11 @@ try {
     const signedKeyPathTx = await keyPathAccount0.signTransaction(unsignedKeyPathTx);
     console.log(`[Key-Path] Transaction created and signed`);
     console.log(`Witness stack: [<schnorr_signature(64 bytes)>]\n`);
-    // console.log(await client.sendTransaction(signedKeyPathTx));
+    const keyPathTxid = await client.sendTransaction(signedKeyPathTx);
+    console.log(`[Key-Path] Transaction sent: ${keyPathTxid}`);
+    // Generate a block to confirm
+    await rpc.call('generatetoaddress', [1, (await rpc.call('getnewaddress', []))]);
+    console.log(`[Key-Path] Block generated and transaction confirmed\n`);
 } catch (e) {
     console.log(`[Key-Path] Transaction creation skipped: ${e.message}\n`);
 }
@@ -133,8 +141,12 @@ console.log(`[Script-Path] Depositing ${depositAmount} sats into hash-lock addre
 try {
     const depositPsbt = await keyPathAccount0.createTransaction(scriptWallet.address, depositAmount);
     const depositTxHex = await keyPathAccount0.signTransaction(depositPsbt);
-    console.log(`[Script-Path] Deposit transaction created and signed\n`);
-    // await client.sendTransaction(depositTxHex);
+    console.log(`[Script-Path] Deposit transaction created and signed`);
+    const depositTxid = await client.sendTransaction(depositTxHex);
+    console.log(`[Script-Path] Deposit transaction sent: ${depositTxid}`);
+    // Generate a block to confirm
+    await rpc.call('generatetoaddress', [1, (await rpc.call('getnewaddress', []))]);
+    console.log(`[Script-Path] Deposit confirmed\n`);
 } catch (e) {
     console.log(`[Script-Path] Deposit transaction skipped: ${e.message}\n`);
 }
@@ -148,10 +160,17 @@ console.log(`Witness stack: [<preimage>, <redeemScript>, <controlBlock>]\n`);
 
 try {
     const sweepPsbt = await scriptWallet.createTransaction(keyPathAccount0.address, sweepAmount);
-    // The sweep PSBT would need custom finalization to add the preimage witness
-    // For now just show structure
-    console.log(`[Script-Path] Sweep transaction structure created`);
-    console.log(`Status: Demo structure shown (full sweep requires witness arg provider)\n`);
+    // Finalize the sweep transaction with the preimage
+    const psbt = bitcoin.Psbt.fromHex(sweepPsbt, { network });
+    const finalizer = bitcoin.Psbt.finalScriptWitness([preimage, hashLockScript]);
+    psbt.finalizeInput(0, finalizer);
+    const sweepTxHex = psbt.extractTransaction().toHex();
+    
+    const sweepTxid = await client.sendTransaction(sweepTxHex);
+    console.log(`[Script-Path] Sweep transaction sent: ${sweepTxid}`);
+    // Generate a block to confirm
+    await rpc.call('generatetoaddress', [1, (await rpc.call('getnewaddress', []))]);
+    console.log(`[Script-Path] Sweep confirmed\n`);
 } catch (e) {
     console.log(`[Script-Path] Sweep transaction skipped: ${e.message}\n`);
 }

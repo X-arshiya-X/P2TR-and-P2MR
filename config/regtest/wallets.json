@@ -1,0 +1,21 @@
+{
+  "createdAt": "2026-04-06T02:13:48.321Z",
+  "addresses": [
+    {
+      "name": "test-address-0",
+      "address": "bcrt1qy3c32rz7x4y8cxkwwp25vyjdx2qvqz5sj8mpy6",
+      "index": 0
+    },
+    {
+      "name": "test-address-1",
+      "address": "bcrt1qym0czng4f2nvqy9d7zrw4v45c4e9zmkrlatua3",
+      "index": 1
+    },
+    {
+      "name": "test-address-2",
+      "address": "bcrt1qlf8q7u5ucha77399a36u9d0p28yw7h4ws9gv04",
+      "index": 2
+    }
+  ],
+  "minerAddress": "bcrt1q3ugnngakkvst5eakjdgygyttrl6ct3s7w05h03"
+}

@@ -42,7 +42,40 @@ async function jget(path) {
   if (!r.ok) throw new Error(`${path} -> ${r.status} ${await r.text()}`);
   return r.json();
 }
+/**
+ * Select UTXOs from RPC client (for regtest)
+ * @param {Object} rpc – Bitcoin RPC client
+ * @param {string} address – Bitcoin address to select from
+ * @param {bigint} amount – Satoshis to send
+ * @param {string} feeSelection – Fee tier (not used for regtest, uses fixed 1 sat/vB)
+ * @returns {Promise<{utxos: Array, total: bigint, fee: bigint}>} Selected UTXOs and calculated fee
+ */
+async function selectUtxosRpc(rpc, address, amount) {
+    // Get all unspent outputs and filter by address
+    const allUnspent = await rpc.call('listunspent', [0, 999999]);
+    const utxos = allUnspent
+        .filter(u => u.address === address)
+        .map(u => ({
+            txid: u.txid,
+            vout: u.vout,
+            value: BigInt(Math.floor(u.amount * 100000000))
+        }))
+        .sort((a, b) => (a.value < b.value ? 1 : -1));
+    
+    // Use fixed 1 sat/vB for regtest
+    let total = 0n;
+    let fee = 0n;
+    let index = 0;
+    do {
+        if (index >= utxos.length) throw new Error("Not enough funds");
+        const utxo = utxos[index++];
+        total += utxo.value;
+        const size = 10 + 58 * (index + 1) + 31 * 2;
+        fee = BigInt(size); // 1 sat/vB
+    } while (total < (amount + fee));
 
+    return { utxos: utxos.slice(0, index), total, fee };
+}
 /**
  * Select UTXOs using greedy algorithm (largest first)
  * Estimates transaction size for P2MR (similar to P2TR)
@@ -145,11 +178,11 @@ class MerkleRootDirectWallet {
     /**
      * Create a P2MR direct wallet from mnemonic
      * @param {bitcoin.Network} network – Bitcoin network
-     * @param {string} mempool – Mempool API base URL
+     * @param {string|Object} mempoolOrRpc – Mempool API base URL (string) or RPC client (object)
      * @param {string|string[]} mnemonic – BIP-39 seed phrase
      * @param {number} accountNumber – BIP-44 account index
      */
-    constructor(network, mempool, mnemonic, accountNumber) {
+    constructor(network, mempoolOrRpc, mnemonic, accountNumber) {
         const phrase = Array.isArray(mnemonic) ? mnemonic.join(" ") : mnemonic;
         const seed = bip39.mnemonicToSeedSync(phrase);
         const root = bip32.fromSeed(seed, network);
@@ -167,7 +200,9 @@ class MerkleRootDirectWallet {
         });
         
         this.network = network;
-        this.mempool = mempool;
+        this.isRpc = typeof mempoolOrRpc === 'object';
+        this.mempool = this.isRpc ? null : mempoolOrRpc;
+        this.rpc = this.isRpc ? mempoolOrRpc : null;
         this.address = pay.address;
         this.publicKey = node.publicKey;
         this.privateKey = node.privateKey;
@@ -197,7 +232,9 @@ class MerkleRootDirectWallet {
      * @returns {Promise<string>} Unsigned PSBT hex
      */
     async createTransaction(toAddress, amount, feeSelection = 'halfHourFee') {
-        const { utxos, total, fee } = await selectUtxos(this.mempool, this.address, amount, feeSelection);
+        const { utxos, total, fee } = this.isRpc
+            ? await selectUtxosRpc(this.rpc, this.address, amount)
+            : await selectUtxos(this.mempool, this.address, amount, feeSelection);
     
         const psbt = new bitcoin.Psbt({ network: this.network });
 
@@ -246,12 +283,12 @@ class MerkleRootScriptWallet {
     /**
      * Create a P2MR script-path wallet with multiple spending conditions
      * @param {bitcoin.Network} network – Bitcoin network
-     * @param {string} mempool – Mempool API base URL
+     * @param {string|Object} mempoolOrRpc – Mempool API base URL (string) or RPC client (object)
      * @param {string|string[]} mnemonic – BIP-39 seed phrase
      * @param {number} accountNumber – BIP-44 account index
      * @param {number} numScripts – Number of script conditions (default 3)
      */
-    constructor(network, mempool, mnemonic, accountNumber, numScripts = 3) {
+    constructor(network, mempoolOrRpc, mnemonic, accountNumber, numScripts = 3) {
         const phrase = Array.isArray(mnemonic) ? mnemonic.join(" ") : mnemonic;
         const seed = bip39.mnemonicToSeedSync(phrase);
         const root = bip32.fromSeed(seed, network);
@@ -310,7 +347,9 @@ class MerkleRootScriptWallet {
         });
         
         this.network = network;
-        this.mempool = mempool;
+        this.isRpc = typeof mempoolOrRpc === 'object';
+        this.mempool = this.isRpc ? null : mempoolOrRpc;
+        this.rpc = this.isRpc ? mempoolOrRpc : null;
         this.address = taproot.address;
         this.publicKey = node.publicKey;
         this.privateKey = node.privateKey;
@@ -347,7 +386,9 @@ class MerkleRootScriptWallet {
      * @returns {Promise<string>} Unsigned PSBT hex
      */
     async createTransaction(toAddress, amount, feeSelection = 'halfHourFee') {
-        const { utxos, total, fee } = await selectUtxos(this.mempool, this.address, amount, feeSelection);
+        const { utxos, total, fee } = this.isRpc
+            ? await selectUtxosRpc(this.rpc, this.address, amount)
+            : await selectUtxos(this.mempool, this.address, amount, feeSelection);
     
         const psbt = new bitcoin.Psbt({ network: this.network });
 
@@ -379,7 +420,7 @@ class MerkleRootScriptWallet {
 // ─── BitcoinClient ────────────────────────────────────────────────────────────
 
 /**
- * Main entry point for P2MR Bitcoin operations on testnet4
+ * Main entry point for P2MR Bitcoin operations on testnet4 or regtest
  * Manages network context and provides wallet factory methods
  */
 export class BitcoinClient {
@@ -387,11 +428,13 @@ export class BitcoinClient {
     /**
      * Create a Bitcoin client for P2MR operations
      * @param {bitcoin.Network} network – Bitcoin network (mainnet/testnet/regtest)
-     * @param {string} mempool – Base URL of mempool.space-compatible API
+     * @param {string|Object} mempoolOrRpc – Base URL of mempool.space-compatible API or RPC client
      */
-    constructor(network, mempool) {
+    constructor(network, mempoolOrRpc) {
         this.network = network;
-        this.mempool = mempool;
+        this.isRpc = typeof mempoolOrRpc === 'object';
+        this.mempool = this.isRpc ? null : mempoolOrRpc;
+        this.rpc = this.isRpc ? mempoolOrRpc : null;
     }
   
     /**
@@ -401,7 +444,8 @@ export class BitcoinClient {
      * @returns {MerkleRootDirectWallet}
      */
     getMerkleRootDirectWallet(mnemonic, accountNumber) {
-        return new MerkleRootDirectWallet(this.network, this.mempool, mnemonic, accountNumber);
+        const dataLayer = this.isRpc ? this.rpc : this.mempool;
+        return new MerkleRootDirectWallet(this.network, dataLayer, mnemonic, accountNumber);
     }
 
     /**
@@ -412,7 +456,8 @@ export class BitcoinClient {
      * @returns {MerkleRootScriptWallet}
      */
     getMerkleRootScriptWallet(mnemonic, accountNumber) {
-        return new MerkleRootScriptWallet(this.network, this.mempool, mnemonic, accountNumber);
+        const dataLayer = this.isRpc ? this.rpc : this.mempool;
+        return new MerkleRootScriptWallet(this.network, dataLayer, mnemonic, accountNumber);
     }
   
     /**
@@ -420,8 +465,27 @@ export class BitcoinClient {
      * @param {string} address – Bitcoin address
      * @returns {Promise<Array>} Array of UTXO objects
      */
-    getUtxos(address) {
-        return jget(`${this.mempool}/address/${address}/utxo`);
+    async getUtxos(address) {
+        if (this.isRpc) {
+            try {
+                // Try listunspent (for addresses in the wallet)
+                const allUnspent = await this.rpc.call('listunspent', [0, 999999]);
+                const filtered = allUnspent.filter(u => u.address === address);
+                if (filtered.length > 0) {
+                    return filtered.map(u => ({
+                        txid: u.txid,
+                        vout: u.vout,
+                        value: BigInt(Math.floor(u.amount * 100000000))
+                    }));
+                }
+                return [];
+            } catch (e) {
+                console.error(`Error fetching UTXOs for ${address}:`, e.message);
+                return [];
+            }
+        } else {
+            return jget(`${this.mempool}/address/${address}/utxo`);
+        }
     }
   
     /**
@@ -432,5 +496,23 @@ export class BitcoinClient {
     async getBalance(address) {
         const utxos = await this.getUtxos(address);
         return Number(utxos.reduce((acc, u) => acc + BigInt(u.value), 0n)) / 100000000;
+    }
+
+    /**
+     * Send a raw transaction to the network
+     * @param {string} txHex – Raw transaction hex
+     * @returns {Promise<string>} Transaction ID
+     */
+    async sendTransaction(txHex) {
+        if (this.isRpc) {
+            return this.rpc.call('sendrawtransaction', [txHex]);
+        } else {
+            const response = await fetch(`${this.mempool}/tx`, {
+                method: 'POST',
+                headers: { 'content-type': 'text/plain' },
+                body: txHex
+            });
+            return response.text();
+        }
     }
 }

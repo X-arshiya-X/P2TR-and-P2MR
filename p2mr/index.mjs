@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * p2mr.mjs – Pay-to-Merkle-Root (P2MR, BIP-360) demo on Bitcoin Testnet 4
+ * p2mr.mjs – Pay-to-Merkle-Root (P2MR, BIP-360) demo on Bitcoin Regtest
  *
  * P2MR is like a P2TR script-path spend but with the key-path removed:
  *
@@ -22,7 +22,7 @@
  *
  * NOTE: BIP-360 is a draft — not yet activated on testnet4 or mainnet.
  *       Old nodes treat unrecognised SegWit versions as anyone-can-spend.
- *       To actually broadcast, uncomment the sendTransaction lines.
+ *       This demo broadcasts transactions to the local regtest blockchain.
  *
  * Usage:
  *   node p2mr.mjs <mnemonic.json>
@@ -36,13 +36,11 @@
 import { readFile } from "node:fs/promises";
 import * as bitcoin from 'bitcoinjs-lib';
 import { BitcoinClient } from "./lib.mjs";
+import { createRpcClient } from "../scripts/rpc-client.mjs";
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
-const network = bitcoin.networks.testnet;
-const mempool = "https://mempool.space/testnet4/api";
-
-const client = new BitcoinClient(network, mempool);
+const network = bitcoin.networks.regtest;
 
 // ─── Load Mnemonic ─────────────────────────────────────────────────────────────
 
@@ -52,6 +50,12 @@ if (!process.argv[2]) {
 }
 
 const mnemonic = JSON.parse(await readFile(process.argv[2]));
+
+// ─── Initialize RPC Client ────────────────────────────────────────────────────
+
+console.log("🚀 Connecting to Bitcoin regtest via RPC...\n");
+const rpc = await createRpcClient();
+const client = new BitcoinClient(network, rpc);
 
 // ─── Funder ────────────────────────────────────────────────────────────────────
 
@@ -129,11 +133,12 @@ if (funderUtxos.length === 0) {
 } else {
   const depositPsbt = await funderAccount.createTransaction(p2mrWallet.address, depositAmount);
   const depositTxHex = await funderAccount.signTransaction(depositPsbt);
-  console.log("Deposit TX hex:");
-  console.log(depositTxHex);
-  // const depositTxid = await client.sendTransaction(depositTxHex);
-  // console.log(`Deposit txid: ${depositTxid}`);
-  console.log();
+  console.log("Deposit TX created and signed");
+  const depositTxid = await client.sendTransaction(depositTxHex);
+  console.log(`Deposit txid: ${depositTxid}`);
+  // Generate a block to confirm
+  await rpc.call('generatetoaddress', [1, (await rpc.call('getnewaddress', []))]);
+  console.log(`Deposit confirmed\n`);
 }
 
 // ─── Step 2: Spend from P2MR using Leaf A ────────────────────────────────────
@@ -165,11 +170,12 @@ if (p2mrUtxos.length === 0) {
 } else {
   const sweepPsbt = await p2mrWallet.createTransaction(funderAccount.address, sweepAmount);
   const sweepTxHex = await p2mrWallet.signTransaction(sweepPsbt);
-  console.log("Sweep TX hex:");
-  console.log(sweepTxHex);
-  // const sweepTxid = await client.sendTransaction(sweepTxHex);
-  // console.log(`Sweep txid: ${sweepTxid}`);
-  console.log();
+  console.log("Sweep TX created and signed");
+  const sweepTxid = await client.sendTransaction(sweepTxHex);
+  console.log(`Sweep txid: ${sweepTxid}`);
+  // Generate a block to confirm
+  await rpc.call('generatetoaddress', [1, (await rpc.call('getnewaddress', []))]);
+  console.log(`Sweep confirmed\n`);
 }
 
 // ─── Summary ───────────────────────────────────────────────────────────────────

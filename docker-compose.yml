@@ -10,7 +10,7 @@ services:
       - "18444:18444"  # ZMQ notifications
     volumes:
       - bitcoin-data:/home/bitcoin/.bitcoin
-      - ./bitcoin.conf:/home/bitcoin/.bitcoin/bitcoin.conf
+      - ./config/bitcoin.conf:/home/bitcoin/.bitcoin/bitcoin.conf
     command: >
       -regtest
       -server

@@ -14,7 +14,7 @@ import { createRpcClient } from './rpc-client.mjs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
-const CONFIG_DIR = './regtest-config';
+const CONFIG_DIR = './config/regtest';
 const WALLETS_FILE = path.join(CONFIG_DIR, 'wallets.json');
 
 async function ensureConfigDir() {
