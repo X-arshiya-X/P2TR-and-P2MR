@@ -64,7 +64,7 @@ console.log("(Draft BIP – not yet activated on testnet4)\n");
 
 const funderAccount = client.getMerkleRootDirectWallet(mnemonic, 0);
 console.log(`Funder (P2TR) address : ${funderAccount.address}`);
-console.log(`Funder        balance : ${await client.getBalance(funderAccount.address)} sats\n`);
+console.log(`Funder        balance : ${await client.getBalance(funderAccount.address)} BTC\n`);
 
 // ─── Script Tree ───────────────────────────────────────────────────────────────
 //
@@ -112,7 +112,7 @@ const p2mrWallet = client.getMerkleRootDirectWallet(mnemonic, 1);
 console.log("=== P2MR Address Construction ===");
 console.log(`scriptPubKey     : OP_2 (0x52) + PUSH32 (0x20) + <merkle_root>\n`);
 console.log(`P2MR address     : ${p2mrWallet.address}   ← tb1z... = SegWit v2`);
-console.log(`P2MR balance     : ${await client.getBalance(p2mrWallet.address)} sats\n`);
+console.log(`P2MR balance     : ${await client.getBalance(p2mrWallet.address)} BTC\n`);
 
 // ─── Step 1: Fund the P2MR output ──────────────────────────────────────────────
 //

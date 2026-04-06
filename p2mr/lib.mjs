@@ -51,10 +51,9 @@ async function jget(path) {
  * @returns {Promise<{utxos: Array, total: bigint, fee: bigint}>} Selected UTXOs and calculated fee
  */
 async function selectUtxosRpc(rpc, address, amount) {
-    // Get all unspent outputs and filter by address
-    const allUnspent = await rpc.call('listunspent', [0, 999999]);
-    const utxos = allUnspent
-        .filter(u => u.address === address)
+    // Use scantxoutset to find UTXOs for any address (including mnemonic-derived)
+    const result = await rpc.call('scantxoutset', ['start', [`addr(${address})`]]);
+    const utxos = (result?.unspents ?? [])
         .map(u => ({
             txid: u.txid,
             vout: u.vout,
@@ -217,15 +216,23 @@ class MerkleRootDirectWallet {
      */
     signTransaction(psbtHex) {
         const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: this.network });
-        for (let i = 0; i < psbt.data.inputs.length; i++) {
-            const keyPair = ECPair.fromPrivateKey(this.privateKey, { network: this.network });
-            psbt.signInput(i, keyPair, undefined, 0x81);
+        // Key-path taproot requires the *tweaked* private key (BIP-340/BIP-341)
+        let privKey = this.privateKey;
+        if (this.publicKey[0] === 3) {
+            privKey = ecc.privateNegate(privKey);
         }
-        return psbt.toHex();
+        const tweak = bitcoin.crypto.taggedHash('TapTweak', this.internalPubkey);
+        const tweakedPrivKey = ecc.privateAdd(privKey, tweak);
+        const tweakedKeyPair = ECPair.fromPrivateKey(Buffer.from(tweakedPrivKey), { network: this.network });
+        for (let i = 0; i < psbt.data.inputs.length; i++) {
+            psbt.signTaprootInput(i, tweakedKeyPair);
+        }
+        psbt.finalizeAllInputs();
+        return psbt.extractTransaction().toHex();
     }
     
     /**
-     * Build and sign an unsigned PSBT
+     * Build an unsigned PSBT
      * @param {string} toAddress – Destination address
      * @param {bigint} amount – Satoshis to send
      * @param {string} feeSelection – Fee tier
@@ -244,19 +251,20 @@ class MerkleRootDirectWallet {
               index: inp.vout,
               witnessUtxo: {
                 script: this.output,
-                value: inp.value,
+                value: Number(inp.value), // bip174 requires Number, not BigInt
               },
+              tapInternalKey: this.internalPubkey, // required for key-path taproot signing
             });
         }
     
         psbt.addOutput({
             address: toAddress,
-            value: amount,
+            value: Number(amount),
         });
     
         let change = total - amount - fee;
         if (change >= DUST) {
-            psbt.addOutput({ address: this.address, value: change });
+            psbt.addOutput({ address: this.address, value: Number(change) });
         }
     
         return psbt.toHex();
@@ -398,19 +406,20 @@ class MerkleRootScriptWallet {
               index: inp.vout,
               witnessUtxo: {
                 script: this.output,
-                value: inp.value,
+                value: Number(inp.value), // bip174 requires Number, not BigInt
               },
+              tapInternalKey: this.internalPubkey,
             });
         }
     
         psbt.addOutput({
             address: toAddress,
-            value: amount,
+            value: Number(amount),
         });
     
         let change = total - amount - fee;
         if (change >= DUST) {
-            psbt.addOutput({ address: this.address, value: change });
+            psbt.addOutput({ address: this.address, value: Number(change) });
         }
     
         return psbt.toHex();
@@ -468,17 +477,13 @@ export class BitcoinClient {
     async getUtxos(address) {
         if (this.isRpc) {
             try {
-                // Try listunspent (for addresses in the wallet)
-                const allUnspent = await this.rpc.call('listunspent', [0, 999999]);
-                const filtered = allUnspent.filter(u => u.address === address);
-                if (filtered.length > 0) {
-                    return filtered.map(u => ({
-                        txid: u.txid,
-                        vout: u.vout,
-                        value: BigInt(Math.floor(u.amount * 100000000))
-                    }));
-                }
-                return [];
+                // Use scantxoutset to find UTXOs for any address (including mnemonic-derived)
+                const result = await this.rpc.call('scantxoutset', ['start', [`addr(${address})`]]);
+                return (result?.unspents ?? []).map(u => ({
+                    txid: u.txid,
+                    vout: u.vout,
+                    value: BigInt(Math.floor(u.amount * 100000000))
+                }));
             } catch (e) {
                 console.error(`Error fetching UTXOs for ${address}:`, e.message);
                 return [];
