@@ -51,10 +51,9 @@ async function jget(path) {
  * @returns {Promise<{utxos: Array, total: bigint, fee: bigint}>} Selected UTXOs and calculated fee
  */
 async function selectUtxosRpc(rpc, address, amount) {
-    // Get all unspent outputs and filter by address
-    const allUnspent = await rpc.call('listunspent', [0, 999999]);
-    const utxos = allUnspent
-        .filter(u => u.address === address)
+    // Use scantxoutset to find UTXOs for any address (including mnemonic-derived)
+    const result = await rpc.call('scantxoutset', ['start', [`addr(${address})`]]);
+    const utxos = (result?.unspents ?? [])
         .map(u => ({
             txid: u.txid,
             vout: u.vout,
@@ -188,11 +187,20 @@ class TaprootKeyPathWallet {
      */
     signTransaction(psbtHex) {
         const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: this.network });
-        for (let i = 0; i < psbt.data.inputs.length; i++) {
-            const keyPair = ECPair.fromPrivateKey(this.privateKey, { network: this.network });
-            psbt.signInput(i, keyPair, undefined, 0x81); // 0x81 = SIGHASH_ALL for taproot
+        // Key-path taproot requires the *tweaked* private key (BIP-340/BIP-341)
+        // If the internal key's y-coordinate is odd (prefix 0x03), negate first
+        let privKey = this.privateKey;
+        if (this.publicKey[0] === 3) {
+            privKey = ecc.privateNegate(privKey);
         }
-        return psbt.toHex();
+        const tweak = bitcoin.crypto.taggedHash('TapTweak', this.internalPubkey);
+        const tweakedPrivKey = ecc.privateAdd(privKey, tweak);
+        const tweakedKeyPair = ECPair.fromPrivateKey(Buffer.from(tweakedPrivKey), { network: this.network });
+        for (let i = 0; i < psbt.data.inputs.length; i++) {
+            psbt.signTaprootInput(i, tweakedKeyPair);
+        }
+        psbt.finalizeAllInputs();
+        return psbt.extractTransaction().toHex();
     }
     
     /**
@@ -218,21 +226,22 @@ class TaprootKeyPathWallet {
               index: inp.vout,
               witnessUtxo: {
                 script: this.output,
-                value: inp.value,
+                value: Number(inp.value), // bip174 requires Number, not BigInt
               },
+              tapInternalKey: this.internalPubkey, // required for key-path taproot signing
             });
         }
     
         // Add payment output
         psbt.addOutput({
             address: toAddress,
-            value: amount,
+            value: Number(amount),
         });
     
         // Add change output (if any)
         let change = total - amount - fee;
         if (change >= DUST) {
-            psbt.addOutput({ address: this.address, value: change });
+            psbt.addOutput({ address: this.address, value: Number(change) });
         }
     
         return psbt.toHex();
@@ -427,19 +436,16 @@ class CustomTaprootScriptWallet {
         const psbt = new bitcoin.Psbt({ network: this._client.network });
         let inputTotal = 0n;
 
+        // Control block is the last element of the redeem witness
+        const controlBlock = this._redeem.witness[this._redeem.witness.length - 1];
+
         for (const utxo of utxos) {
-            const txData = await this._client.getTx(utxo.txid);
-            const prevout = txData.vout[utxo.vout];
-
-            // Get the control block from the redeem payment
-            const controlBlock = this._redeem.witness[this._redeem.witness.length - 1];
-
             psbt.addInput({
               hash: utxo.txid,
               index: utxo.vout,
               witnessUtxo: {
-                script: Buffer.from(prevout.scriptpubkey, "hex"),
-                value: BigInt(utxo.value),
+                script: this.output, // use known output script directly
+                value: Number(utxo.value), // bip174 requires Number, not BigInt
               },
               tapLeafScript: [
                 {
@@ -451,7 +457,7 @@ class CustomTaprootScriptWallet {
               tapInternalKey: this._internalPubkey,
             });
 
-            inputTotal += BigInt(utxo.value);
+            inputTotal += utxo.value;
             if (inputTotal >= amount + estimatedFee) break;
         }
 
@@ -461,7 +467,7 @@ class CustomTaprootScriptWallet {
             );
         }
 
-        psbt.addOutput({ address: toAddress, value: amount });
+        psbt.addOutput({ address: toAddress, value: Number(amount) });
 
         const change = inputTotal - amount - estimatedFee;
         if (change > 546n) {
@@ -470,10 +476,10 @@ class CustomTaprootScriptWallet {
                 internalPubkey: this._internalPubkey,
                 network: this._client.network,
             }).address;
-            psbt.addOutput({ address: changeAddr, value: change });
+            psbt.addOutput({ address: changeAddr, value: Number(change) });
         }
 
-        return psbt;
+        return psbt.toHex();
     }
 }
 
@@ -540,17 +546,13 @@ export class BitcoinClient {
     async getUtxos(address) {
         if (this.isRpc) {
             try {
-                // Try listunspent (for addresses in the wallet)
-                const allUnspent = await this.rpc.call('listunspent', [0, 999999]);
-                const filtered = allUnspent.filter(u => u.address === address);
-                if (filtered.length > 0) {
-                    return filtered.map(u => ({
-                        txid: u.txid,
-                        vout: u.vout,
-                        value: BigInt(Math.floor(u.amount * 100000000))
-                    }));
-                }
-                return [];
+                // Use scantxoutset to find UTXOs for any address (including mnemonic-derived)
+                const result = await this.rpc.call('scantxoutset', ['start', [`addr(${address})`]]);
+                return (result?.unspents ?? []).map(u => ({
+                    txid: u.txid,
+                    vout: u.vout,
+                    value: BigInt(Math.floor(u.amount * 100000000))
+                }));
             } catch (e) {
                 console.error(`Error fetching UTXOs for ${address}:`, e.message);
                 return [];

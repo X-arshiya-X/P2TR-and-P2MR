@@ -40,6 +40,17 @@ import * as bitcoin from 'bitcoinjs-lib';
 import { BitcoinClient } from "./lib.mjs";
 import { createRpcClient } from "../scripts/rpc-client.mjs";
 
+// Encode a witness stack into the Bitcoin serialization format
+function serializeWitness(items) {
+    const encodeVarInt = n => n < 0xfd
+        ? Buffer.from([n])
+        : Buffer.concat([Buffer.from([0xfd]), Buffer.from([n & 0xff, (n >> 8) & 0xff])]);
+    return Buffer.concat([
+        encodeVarInt(items.length),
+        ...items.flatMap(item => [encodeVarInt(item.length), item])
+    ]);
+}
+
 // ─── Config ────────────────────────────────────────────────────────────────────
 
 const network = bitcoin.networks.regtest;
@@ -69,11 +80,11 @@ console.log("=== P2TR Key-Path Spend (Most Private) ===\n");
 
 const keyPathAccount0 = client.getTaprootKeyPathWallet(mnemonic, 0);
 console.log(`Account 0  address : ${keyPathAccount0.address}`);
-console.log(`Account 0  balance : ${await client.getBalance(keyPathAccount0.address)} sats\n`);
+console.log(`Account 0  balance : ${await client.getBalance(keyPathAccount0.address)} BTC\n`);
 
 const keyPathAccount1 = client.getTaprootKeyPathWallet(mnemonic, 1);
 console.log(`Account 1  address : ${keyPathAccount1.address}`);
-console.log(`Account 1  balance : ${await client.getBalance(keyPathAccount1.address)} sats\n`);
+console.log(`Account 1  balance : ${await client.getBalance(keyPathAccount1.address)} BTC\n`);
 
 // Create and sign transaction (key-path spend)
 //   • No script tree involved — just tweaked key + schnorr sig
@@ -132,7 +143,7 @@ const internalPubkey = keyPathAccount0.publicKey.subarray(1);
 const scriptWallet = client.getTaprootScriptWallet(hashLockScript, internalPubkey);
 
 console.log(`Script P2TR address : ${scriptWallet.address}`);
-console.log(`Script balance      : ${await client.getBalance(scriptWallet.address)} sats\n`);
+console.log(`Script balance      : ${await client.getBalance(scriptWallet.address)} BTC\n`);
 
 // Step 3: Deposit into the hash-lock address
 const depositAmount = BigInt(Math.floor(0.0005 * 100000000)); // 50 000 sats
@@ -160,10 +171,15 @@ console.log(`Witness stack: [<preimage>, <redeemScript>, <controlBlock>]\n`);
 
 try {
     const sweepPsbt = await scriptWallet.createTransaction(keyPathAccount0.address, sweepAmount);
-    // Finalize the sweep transaction with the preimage
+    // Finalize the sweep with the preimage — witness: [preimage, script, controlBlock]
     const psbt = bitcoin.Psbt.fromHex(sweepPsbt, { network });
-    const finalizer = bitcoin.Psbt.finalScriptWitness([preimage, hashLockScript]);
-    psbt.finalizeInput(0, finalizer);
+    psbt.finalizeInput(0, (_idx, input) => ({
+        finalScriptWitness: serializeWitness([
+            preimage,
+            input.tapLeafScript[0].script,
+            input.tapLeafScript[0].controlBlock,
+        ])
+    }));
     const sweepTxHex = psbt.extractTransaction().toHex();
     
     const sweepTxid = await client.sendTransaction(sweepTxHex);
