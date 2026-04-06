@@ -4,10 +4,10 @@
   "description": "Bitcoin transaction format examples: P2TR (Pay to Taproot) and P2MR (Pay to Merkle Root)",
   "type": "module",
   "scripts": {
-    "p2pkh": "node example/p2pkh.mjs",
-    "p2sh": "node example/p2sh.mjs",
     "p2tr": "node p2tr/index.mjs",
-    "p2mr": "node p2mr/index.mjs"
+    "p2mr": "node p2mr/index.mjs",
+    "setup-regtest": "node scripts/setup-regtest.mjs",
+    "example-regtest": "node scripts/example-regtest.mjs"
   },
   "keywords": ["bitcoin", "taproot", "merkle-root", "p2tr", "p2mr"],
   "author": "",

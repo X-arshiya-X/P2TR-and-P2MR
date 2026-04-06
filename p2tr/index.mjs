@@ -1,59 +1,171 @@
 #!/usr/bin/env node
+/**
+ * p2tr.mjs – Pay-to-Taproot (P2TR, BIP-341) demo on Bitcoin Testnet 4
+ *
+ * P2TR is the native taproot spending mechanism with two paths:
+ *
+ *   ┌─────────────────────────────────────────────────────────────────┐
+ *   │                        P2TR Output                              │
+ *   │                  scriptPubKey Format                            │
+ *   │        OP_1 (0x51)  |  OP_PUSHBYTES_32 (0x20)  |  <key>        │
+ *   │                    SegWit v1  (tb1p...)                        │
+ *   │                                                                  │
+ *   │   Path 1: Key-Path Spend (Most Private)                        │
+ *   │      • Witness: [<schnorr_signature>]                          │
+ *   │      • Looks like any key spend on-chain                       │
+ *   │      • cheapest spend path                                     │
+ *   │                                                                  │
+ *   │   Path 2: Script-Path Spend (Reveals Script)                   │
+ *   │      • Witness: [<...args...>, <script>, <control_block>]      │
+ *   │      • Control block includes: leaf_version | parity |         │
+ *   │        internal_key(32B) | merkle_proof...                     │
+ *   │      • Only one script in tree revealed (others stay hidden)    │
+ *   └─────────────────────────────────────────────────────────────────┘
+ *
+ * Usage:
+ *   node p2tr.mjs <mnemonic.json>
+ *
+ * Where <mnemonic.json> is a JSON file containing the BIP-39 word array:
+ *   ["word1","word2",...,"word12"]
+ *
+ * This demo shows:
+ *   1. Key-Path Spend: account0 → account1  (most private, schnorr signature)
+ *   2. Script-Path Spend: hash-lock example (anyone with preimage can spend)
+ *
+ * To actually broadcast a transaction, uncomment the sendTransaction lines.
+ */
+
 import { readFile } from "node:fs/promises";
 import * as bitcoin from 'bitcoinjs-lib';
 import { BitcoinClient } from "./lib.mjs";
+
+// ─── Config ────────────────────────────────────────────────────────────────────
 
 const network = bitcoin.networks.testnet;
 const mempool = "https://mempool.space/testnet4/api";
 
 const client = new BitcoinClient(network, mempool);
 
+// ─── Load Mnemonic ─────────────────────────────────────────────────────────────
+
+if (!process.argv[2]) {
+  console.error("Usage: node p2tr.mjs <mnemonic.json>");
+  process.exit(1);
+}
+
 const mnemonic = JSON.parse(await readFile(process.argv[2]));
 
-// ============================================
-// P2TR Key-Path Spend Example
-// ============================================
-console.log("=== P2TR Key-Path Spend ===");
+// ─── 1. Key-Path Spend  ────────────────────────────────────────────────────────
+//
+//  The key-path spend is the default path for P2TR outputs. It requires only
+//  a single Schnorr signature and reveals no script information on-chain.
+//  No script is revealed — maximally private and efficient.
+
+console.log("=== P2TR Key-Path Spend (Most Private) ===\n");
+
 const keyPathAccount0 = client.getTaprootKeyPathWallet(mnemonic, 0);
-console.log(`Key-Path Account 0 address: ${keyPathAccount0.address}`);
-console.log(`Key-Path Account 0 Balance: ${await client.getBalance(keyPathAccount0.address)}`);
+console.log(`Account 0  address : ${keyPathAccount0.address}`);
+console.log(`Account 0  balance : ${await client.getBalance(keyPathAccount0.address)} sats\n`);
 
 const keyPathAccount1 = client.getTaprootKeyPathWallet(mnemonic, 1);
-console.log(`Key-Path Account 1 address: ${keyPathAccount1.address}`);
-console.log(`Key-Path Account 1 Balance: ${await client.getBalance(keyPathAccount1.address)}`);
+console.log(`Account 1  address : ${keyPathAccount1.address}`);
+console.log(`Account 1  balance : ${await client.getBalance(keyPathAccount1.address)} sats\n`);
 
 // Create and sign transaction (key-path spend)
-const keyPathAmount = BigInt(Math.floor(0.001 * 100000000));
+//   • No script tree involved — just tweaked key + schnorr sig
+//   • Cheapest spend path (only 64-byte signature in witness)
+//   • Indistinguishable from other P2TR key-path spends
+const keyPathAmount = BigInt(Math.floor(0.001 * 100000000)); // 100 000 sats
 try {
     const unsignedKeyPathTx = await keyPathAccount0.createTransaction(keyPathAccount1.address, keyPathAmount);
     const signedKeyPathTx = await keyPathAccount0.signTransaction(unsignedKeyPathTx);
-    console.log(`Key-Path transaction created and signed`);
+    console.log(`[Key-Path] Transaction created and signed`);
+    console.log(`Witness stack: [<schnorr_signature(64 bytes)>]\n`);
     // console.log(await client.sendTransaction(signedKeyPathTx));
 } catch (e) {
-    console.log(`Transaction creation skipped: ${e.message}`);
+    console.log(`[Key-Path] Transaction creation skipped: ${e.message}\n`);
 }
 
-console.log("\n");
+// ─── 2. Script-Path Spend  ────────────────────────────────────────────────────
+//
+//  We commit a "hash-lock" script inside the tap tree:
+//
+//    OP_SHA256 <hash> OP_EQUALVERIFY OP_TRUE
+//
+//  To spend, the witness stack must be:
+//    <preimage>  <redeemScript>  <controlBlock>
+//
+//  This demonstrates how tap-script leaves provide flexible spending conditions.
+//  The hash-lock is a simple example; real use cases include multisig, timelocks, etc.
 
-// ============================================
-// P2TR Script-Path Spend Example
-// ============================================
-console.log("=== P2TR Script-Path Spend ===");
-const scriptPathAccount0 = client.getTaprootScriptPathWallet(mnemonic, 2);
-console.log(`Script-Path Account 0 address: ${scriptPathAccount0.address}`);
-console.log(`Script-Path Account 0 Balance: ${await client.getBalance(scriptPathAccount0.address)}`);
+console.log("=== P2TR Script-Path Spend (Hash-Lock Example) ===\n");
 
-const scriptPathAccount1 = client.getTaprootScriptPathWallet(mnemonic, 3);
-console.log(`Script-Path Account 1 address: ${scriptPathAccount1.address}`);
-console.log(`Script-Path Account 1 Balance: ${await client.getBalance(scriptPathAccount1.address)}`);
+// Step 1: Create a hash-lock script that accepts anyone who knows a preimage
+const preimage = Buffer.from("hello taproot", "utf8");
+const preimageHash = bitcoin.crypto.sha256(preimage);
 
-// Create and sign transaction (script-path spend)
-const scriptPathAmount = BigInt(Math.floor(0.001 * 100000000));
+console.log(`Preimage         : "${preimage.toString("utf8")}"`);
+console.log(`SHA-256(preimage): ${preimageHash.toString("hex")}`);
+
+// Script reads top of stack, hashes it, and compares against the commitment
+//   OP_SHA256 <expected_hash> OP_EQUALVERIFY OP_TRUE
+const hashLockScript = bitcoin.script.compile([
+  bitcoin.opcodes.OP_SHA256,
+  preimageHash,
+  bitcoin.opcodes.OP_EQUALVERIFY,
+  bitcoin.opcodes.OP_TRUE,
+]);
+
+console.log(`Hash-lock script : ${hashLockScript.toString("hex")}\n`);
+
+// Step 2: Create a P2TR address that commits to this script
+// Need x-only pubkey (32 bytes), so strip the prefix from 33-byte compressed pubkey
+const internalPubkey = keyPathAccount0.publicKey.subarray(1);
+const scriptWallet = client.getTaprootScriptWallet(hashLockScript, internalPubkey);
+
+console.log(`Script P2TR address : ${scriptWallet.address}`);
+console.log(`Script balance      : ${await client.getBalance(scriptWallet.address)} sats\n`);
+
+// Step 3: Deposit into the hash-lock address
+const depositAmount = BigInt(Math.floor(0.0005 * 100000000)); // 50 000 sats
+
+console.log(`[Script-Path] Depositing ${depositAmount} sats into hash-lock address…`);
 try {
-    const unsignedScriptPathTx = await scriptPathAccount0.createTransaction(scriptPathAccount1.address, scriptPathAmount);
-    const signedScriptPathTx = await scriptPathAccount0.signTransaction(unsignedScriptPathTx);
-    console.log(`Script-Path transaction created and signed`);
-    // console.log(await client.sendTransaction(signedScriptPathTx));
+    const depositPsbt = await keyPathAccount0.createTransaction(scriptWallet.address, depositAmount);
+    const depositTxHex = await keyPathAccount0.signTransaction(depositPsbt);
+    console.log(`[Script-Path] Deposit transaction created and signed\n`);
+    // await client.sendTransaction(depositTxHex);
 } catch (e) {
-    console.log(`Transaction creation skipped: ${e.message}`);
+    console.log(`[Script-Path] Deposit transaction skipped: ${e.message}\n`);
 }
+
+// Step 4: Spend from hash-lock address back using the script path
+//   Witness stack: [preimage, redeemScript, controlBlock]
+const sweepAmount = BigInt(Math.floor(0.0004 * 100000000)); // 40 000 sats
+
+console.log(`[Script-Path] Sweeping ${sweepAmount} sats back to account0…`);
+console.log(`Witness stack: [<preimage>, <redeemScript>, <controlBlock>]\n`);
+
+try {
+    const sweepPsbt = await scriptWallet.createTransaction(keyPathAccount0.address, sweepAmount);
+    // The sweep PSBT would need custom finalization to add the preimage witness
+    // For now just show structure
+    console.log(`[Script-Path] Sweep transaction structure created`);
+    console.log(`Status: Demo structure shown (full sweep requires witness arg provider)\n`);
+} catch (e) {
+    console.log(`[Script-Path] Sweep transaction skipped: ${e.message}\n`);
+}
+
+// ─── Summary ───────────────────────────────────────────────────────────────────
+
+console.log("=== P2TR Key-Path vs Script-Path Comparison ===");
+console.log("┌──────────────────────┬──────────────────────┬──────────────────────┐");
+console.log("│ Feature              │ Key-Path             │ Script-Path          │");
+console.log("├──────────────────────┼──────────────────────┼──────────────────────┤");
+console.log("│ Privacy              │ Maximum (no script)  │ Minimal (reveals 1)  │");
+console.log("│ Witness size         │ 64 bytes (sig)       │ 64B + script + proof │");
+console.log("│ Cost                 │ Cheapest             │ More expensive       │");
+console.log("│ Complexity           │ Single key           │ Multiple conditions  │");
+console.log("│ Control block        │ Never needed         │ Includes 33+ bytes   │");
+console.log("│ Default path         │ YES (preferred)      │ Fallback             │");
+console.log("└──────────────────────┴──────────────────────┴──────────────────────┘");

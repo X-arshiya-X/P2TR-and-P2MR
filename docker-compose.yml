@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  bitcoind:
+    image: ruimarinho/bitcoin-core:latest
+    container_name: bitcoin-regtest
+    ports:
+      - "18332:18332"  # RPC port
+      - "18333:18333"  # P2P port
+      - "18444:18444"  # ZMQ notifications
+    volumes:
+      - bitcoin-data:/home/bitcoin/.bitcoin
+      - ./bitcoin.conf:/home/bitcoin/.bitcoin/bitcoin.conf
+    command: >
+      -regtest
+      -server
+      -rpcuser=bitcoin
+      -rpcpassword=bitcoin
+      -rpcauth=bitcoin:e51f5c49$8926c2b4c7fcde87f5d2e26d9f4ef7f7c1234567890abcdef1234567890a
+      -rpcallowip=0.0.0.0/0
+      -rpcbind=0.0.0.0
+      -txindex=1
+      -fallbackfee=0.0001
+    environment:
+      - BITCOIN_DATA=/home/bitcoin/.bitcoin
+    networks:
+      - bitcoin-net
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=bitcoin", "-rpcpassword=bitcoin", "getblockcount"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Optional: Electrs for Electrum protocol support (useful for wallets)
+  # electrs:
+  #   image: getumbrel/electrs:latest
+  #   container_name: electrs-regtest
+  #   depends_on:
+  #     - bitcoind
+  #   ports:
+  #     - "50001:50001"
+  #   volumes:
+  #     - electrs-data:/data
+  #   command: >
+  #     --jsonrpc-import
+  #     --db-dir /data/electrs_db
+  #     --daemon-rpc-addr bitcoind:18332
+  #     --daemon-p2p-addr bitcoind:18333
+  #     --electrum-rpc-addr 0.0.0.0:50001
+  #   networks:
+  #     - bitcoin-net
+
+volumes:
+  bitcoin-data:
+  # electrs-data:
+
+networks:
+  bitcoin-net:
+    driver: bridge
