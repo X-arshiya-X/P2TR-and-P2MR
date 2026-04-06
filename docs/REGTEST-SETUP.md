@@ -96,25 +96,42 @@ You can modify these in `rpc-client.mjs` if needed.
 
 ## Using Regtest in Your Code
 
-### Switch to regtest in your scripts:
+### P2TR Example:
 
 ```javascript
-import { BitcoinClient } from './unified-client.mjs';
-import { RpcDataLayer } from './unified-client.mjs';
+import { BitcoinClient } from '../p2tr/lib.mjs';
 import { createRpcClient } from './rpc-client.mjs';
+import * as bitcoin from 'bitcoinjs-lib';
 
 // Create RPC client
 const rpc = await createRpcClient();
 
-// Create data layer
-const dataLayer = new RpcDataLayer(rpc);
-
 // Create Bitcoin client with regtest
-const client = new BitcoinClient('regtest', dataLayer);
+const client = new BitcoinClient(bitcoin.networks.regtest, rpc);
 
 // Now use normally
-const wallet = client.getAccountWallet(mnemonic, 0);
+const wallet = client.getTaprootKeyPathWallet(mnemonic, 0);
 console.log(wallet.address);
+console.log(await client.getBalance(wallet.address));
+```
+
+### P2MR Example:
+
+```javascript
+import { BitcoinClient } from '../p2mr/lib.mjs';
+import { createRpcClient } from './rpc-client.mjs';
+import * as bitcoin from 'bitcoinjs-lib';
+
+// Create RPC client
+const rpc = await createRpcClient();
+
+// Create Bitcoin client with regtest
+const client = new BitcoinClient(bitcoin.networks.regtest, rpc);
+
+// Now use normally
+const wallet = client.getMerkleRootDirectWallet(mnemonic, 0);
+console.log(wallet.address);
+console.log(await client.getBalance(wallet.address));
 ```
 
 ## Useful Commands

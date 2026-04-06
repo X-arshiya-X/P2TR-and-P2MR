@@ -66,18 +66,30 @@ npm run setup-regtest
 
 ## Using in Your Code
 
-See [REGTEST-SETUP.md](REGTEST-SETUP.md) for complete integration guide.
+See [REGTEST-SETUP.md](REGTEST-SETUP.md) for complete integration guide. The demos use these patterns:
 
-Quick example:
+**For P2TR:**
 ```javascript
-import { BitcoinClient, RpcDataLayer } from './unified-client.mjs';
+import { BitcoinClient } from '../p2tr/lib.mjs';
 import { createRpcClient } from './rpc-client.mjs';
 
 const rpc = await createRpcClient();
-const dataLayer = new RpcDataLayer(rpc);
-const client = new BitcoinClient('regtest', dataLayer);
+const client = new BitcoinClient(bitcoin.networks.regtest, rpc);
 
-const wallet = client.getAccountWallet(mnemonic, 0);
+const wallet = client.getTaprootKeyPathWallet(mnemonic, 0);
+console.log(`Address: ${wallet.address}`);
+console.log(`Balance: ${await client.getBalance(wallet.address)} BTC`);
+```
+
+**For P2MR:**
+```javascript
+import { BitcoinClient } from '../p2mr/lib.mjs';
+import { createRpcClient } from './rpc-client.mjs';
+
+const rpc = await createRpcClient();
+const client = new BitcoinClient(bitcoin.networks.regtest, rpc);
+
+const wallet = client.getMerkleRootDirectWallet(mnemonic, 0);
 console.log(`Address: ${wallet.address}`);
 console.log(`Balance: ${await client.getBalance(wallet.address)} BTC`);
 ```
@@ -108,9 +120,10 @@ bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin getblockcount
 
 - **docker-compose.yml** - Start Bitcoin Core with one command
 - **rpc-client.mjs** - RPC client for communicating with Bitcoin Core
-- **unified-client.mjs** - Works with both testnet and regtest
 - **setup-regtest.mjs** - Initialize regtest blockchain
 - **example-regtest.mjs** - Full example using regtest
+- **p2tr/lib.mjs** - P2TR wallet utilities and Bitcoin client
+- **p2mr/lib.mjs** - P2MR wallet utilities and Bitcoin client
 - **REGTEST-SETUP.md** - Detailed setup and reference guide
 
 ## Next Steps

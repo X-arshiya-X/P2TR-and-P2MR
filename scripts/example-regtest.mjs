@@ -1,64 +1,63 @@
 #!/usr/bin/env node
 
 /**
- * Example: Using regtest for testing
+ * Example: Using regtest for testing P2TR transactions
  * 
- * This demonstrates how to use the unified client with regtest mode
+ * This demonstrates how to use P2TR wallets with regtest mode
  * 
  * Usage:
- *   node example-regtest.mjs <mnemonic-file>
+ *   node scripts/example-regtest.mjs <mnemonic-file>
  */
 
 import { readFile } from "node:fs/promises";
 import * as bitcoin from 'bitcoinjs-lib';
-import { BitcoinClient, RpcDataLayer } from './unified-client.mjs';
+import { BitcoinClient } from '../p2tr/lib.mjs';
 import { createRpcClient } from './rpc-client.mjs';
 
 async function main() {
   try {
     // Check arguments
     if (process.argv.length < 3) {
-      console.error('Usage: node example-regtest.mjs <mnemonic-file>');
-      console.error('Example: node example-regtest.mjs mnemonic.json');
+      console.error('Usage: node scripts/example-regtest.mjs <mnemonic-file>');
+      console.error('Example: node scripts/example-regtest.mjs mnemonic.json');
       process.exit(1);
     }
 
     // Connect to Bitcoin Core regtest
     console.log('🚀 Connecting to Bitcoin regtest...\n');
     const rpc = await createRpcClient();
-
-    // Create data layer for regtest
-    const dataLayer = new RpcDataLayer(rpc);
+    const network = bitcoin.networks.regtest;
 
     // Create Bitcoin client with regtest
-    const client = new BitcoinClient('regtest', dataLayer);
+    const client = new BitcoinClient(network, rpc);
 
     // Load mnemonic
     console.log('📖 Loading mnemonic...');
     const mnemonic = JSON.parse(await readFile(process.argv[2]));
 
     // Create wallets for different accounts
-    console.log('🔑 Creating wallets from mnemonic...\n');
+    console.log('🔑 Creating P2TR wallets from mnemonic...\n');
 
-    const account0 = client.getAccountWallet(mnemonic, 0);
+    const account0 = client.getTaprootKeyPathWallet(mnemonic, 0);
     console.log(`Account 0 address: ${account0.address}`);
-    console.log(`Account 0 Balance: ${await client.getBalance(account0.address)} BTC`);
+    console.log(`Account 0 balance: ${await client.getBalance(account0.address)} BTC`);
 
-    const account1 = client.getAccountWallet(mnemonic, 1);
+    const account1 = client.getTaprootKeyPathWallet(mnemonic, 1);
     console.log(`\nAccount 1 address: ${account1.address}`);
-    console.log(`Account 1 Balance: ${await client.getBalance(account1.address)} BTC`);
+    console.log(`Account 1 balance: ${await client.getBalance(account1.address)} BTC`);
 
     // Get UTXOs
     console.log('\n📊 UTXOs for Account 0:');
     const utxos = await client.getUtxos(account0.address);
     if (utxos.length === 0) {
       console.log('  No UTXOs found. To fund this address:');
-      console.log(`  1. Generate blocks: bitcoin-cli -regtest generatetoaddress 10 $(bitcoin-cli -regtest getnewaddress)`);
-      console.log(`  2. Send BTC: bitcoin-cli -regtest sendtoaddress ${account0.address} 1`);
-      console.log(`  3. Generate a block: bitcoin-cli -regtest generatetoaddress 1 $(bitcoin-cli -regtest getnewaddress)`);
+      console.log(`  1. Generate blocks: docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin generatetoaddress 10 $(docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin getnewaddress)`);
+      console.log(`  2. Send BTC: docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin sendtoaddress ${account0.address} 1`);
+      console.log(`  3. Generate a block: docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin generatetoaddress 1 $(docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin getnewaddress)`);
     } else {
       utxos.forEach((utxo, i) => {
-        console.log(`  [${i}] ${utxo.txid}:${utxo.vout} = ${Number(utxo.value) / 100000000} BTC`);
+        const valueInBtc = Number(utxo.value) / 100000000;
+        console.log(`  [${i}] ${utxo.txid}:${utxo.vout} = ${valueInBtc} BTC`);
       });
     }
 
@@ -67,8 +66,8 @@ async function main() {
     const amount = BigInt(Math.floor(0.001 * 100000000)); // 0.001 BTC in satoshis
 
     try {
-      const unsignedTx = await account0.createTransaction(account1.address, amount);
-      const signedTx = account0.signTransaction(unsignedTx);
+      const unsignedPsbt = await account0.createTransaction(account1.address, amount);
+      const signedTx = account0.signTransaction(unsignedPsbt);
 
       console.log('✓ Transaction created and signed');
       console.log(`  Sending 0.001 BTC to ${account1.address}`);
@@ -77,7 +76,7 @@ async function main() {
       // Optionally send transaction
       console.log('\n📤 To broadcast this transaction:');
       console.log('  1. Uncomment the sendTransaction call in this script');
-      console.log('  2. Run: bitcoin-cli -regtest generatetoaddress 1 $(bitcoin-cli -regtest getnewaddress)');
+      console.log('  2. Run: docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin generatetoaddress 1 $(docker exec bitcoin-regtest bitcoin-cli -regtest -rpcuser=bitcoin -rpcpassword=bitcoin getnewaddress)');
       console.log('  3. Check balance: bitcoin-cli -regtest getbalance');
 
       // Uncomment to actually send:

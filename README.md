@@ -1,6 +1,10 @@
 # P2TR and P2MR - Bitcoin Transaction Formats
 
-Bitcoin transaction format examples demonstrating **P2TR (Pay to Taproot)** and **P2MR (Pay to Merkle Root)** using bitcoinjs-lib.
+Bitcoin transaction format examples demonstrating **P2TR (Pay to Taproot, BIP-341)** and **P2MR (Pay to Merkle Root, BIP-360)** using bitcoinjs-lib.
+
+> **✅ Quick Demo**: See [DEMO-GUIDE.md](DEMO-GUIDE.md) for step-by-step instructions to run the demos with a real Bitcoin regtest blockchain.
+
+**Note:** Most code in this repository was generated with AI assistance and subsequently validated and modified by the authors to ensure correctness and functionality.
 
 ## 📁 Project Structure
 
@@ -15,7 +19,6 @@ Bitcoin transaction format examples demonstrating **P2TR (Pay to Taproot)** and 
 │
 ├── scripts/                    # Utility scripts
 │   ├── rpc-client.mjs         # Bitcoin Core RPC client
-│   ├── unified-client.mjs     # Works with testnet and regtest
 │   ├── setup-regtest.mjs      # Initialize private blockchain
 │   └── example-regtest.mjs    # Regtest transaction example
 │
@@ -31,46 +34,31 @@ Bitcoin transaction format examples demonstrating **P2TR (Pay to Taproot)** and 
 
 ## 🚀 Quick Start
 
-### Running the Demos
+### Complete Demo Walkthrough
 
-All demos use **mempool.space testnet4 API** and support **dry-run mode** (no testnet coins needed):
+**For the full step-by-step demo with regtest blockchain, see [DEMO-GUIDE.md](DEMO-GUIDE.md)** — covers:
+- Starting Bitcoin Core in Docker
+- Generating a BIP-39 mnemonic
+- Deriving addresses from your seed phrase
+- Funding accounts and running both demos
+- Understanding transactions on-chain
 
-```bash
-# Run P2TR demo (Key-Path & Script-Path Spend)
-npm run p2tr <mnemonic.json>
+### Running Demos Directly
 
-# Run P2MR demo (Merkle Root & Script-Path)
-npm run p2mr <mnemonic.json>
-```
-
-### Example with Test Mnemonic
+Quick demo without setup (dry-run mode, works with mempool.space testnet API):
 
 ```bash
 # Create test mnemonic JSON
 echo '["abandon","ability","able","about","above","absent","absorb","abstract","abuse","access","accident","account"]' > mnemonic.json
 
-# Run demos
+# Run P2TR demo (Key-Path & Script-Path Spend)
 npm run p2tr mnemonic.json
+
+# Run P2MR demo (SegWit v2 with Merkle Root)
 npm run p2mr mnemonic.json
 ```
 
-### Option 1: Regtest (Private Blockchain - For Live Testing)
-```
 
-See [docs/DOCKER-QUICKSTART.md](docs/DOCKER-QUICKSTART.md) for details.
-
-### Option 2: Testnet4 API (No Setup Required)
-
-```bash
-# Create test mnemonic
-echo '["abandon","ability","able","about","above","absent","absorb","abstract","abuse","access","accident","account"]' > mnemonic.json
-
-# Run demos (uses mempool.space testnet4 API)
-npm run p2tr mnemonic.json
-npm run p2mr mnemonic.json
-```
-
-**Note:** Runs in dry-run mode without actual testnet coins. To broadcast live transactions, the addresses need testnet coins.
 
 ## 📚 Available Scripts
 
@@ -100,9 +88,14 @@ npm run p2mr mnemonic.json
 
 ## 📖 Documentation
 
-- [DOCKER-QUICKSTART.md](docs/DOCKER-QUICKSTART.md) - Fast setup with Docker
-- [REGTEST-SETUP.md](docs/REGTEST-SETUP.md) - Detailed regtest configuration
-- Comments in source files explain transaction building
+- **[DEMO-GUIDE.md](DEMO-GUIDE.md)** ⭐ — Complete step-by-step guide (START HERE)
+  - Regtest blockchain setup
+  - Address derivation from mnemonic
+  - Funding and transaction execution
+  - Both P2TR and P2MR demos
+- [docs/DOCKER-QUICKSTART.md](docs/DOCKER-QUICKSTART.md) - Fast Docker setup reference
+- [docs/REGTEST-SETUP.md](docs/REGTEST-SETUP.md) - Detailed regtest configuration
+- Comments in source files explain transaction building and BIP specifications
 
 ## 🏗️ How It Works
 
@@ -122,10 +115,12 @@ npm run p2mr mnemonic.json
   - Supports BIP-342 TapScript for advanced spending conditions
 
 - **P2MR (BIP-360)** - Pay-to-Merkle-Root (Draft)
-  - Script-path only: No key-path spend available
-  - Smaller control blocks (32 bytes saved per input)
-  - Quantum-resistant for long-term key exposure
-  - Currently draft status, educational reference
+  - **SegWit v2** (tb1z... addresses) — different from P2TR's SegWit v1
+  - Script-path only: No key-path spend available (quantum-resistant)
+  - Internal key never exposed on-chain (vs P2TR which reveals key in control block)
+  - Smaller control blocks (32 bytes saved per input vs P2TR)
+  - Currently draft status, not yet activated on mainnet
+  - Educational reference for quantum-resistant Bitcoin protocols
 
 ## 🧪 Testing
 
@@ -161,8 +156,9 @@ Contributions welcome! Please ensure:
 - Comments explain complex logic
 - Examples are fully functional
 
-# Authors:
-
+## 👥 Authors
 
 Sadra Setarehdan, Rafik Hamzi, Arshiya Mahmoodinezhad
+
+**Code Generation:** Most implementation code was generated using AI assistance, with extensive validation, testing, and modifications by the authors to ensure correctness, security, and educational value.
 
