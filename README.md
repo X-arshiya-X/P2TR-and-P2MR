@@ -160,3 +160,9 @@ Contributions welcome! Please ensure:
 - Code follows existing style
 - Comments explain complex logic
 - Examples are fully functional
+
+# Authors:
+
+
+Sadra Setarehdan, Rafik Hamzi, Arshiya Mahmoodinezhad
+
