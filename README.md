@@ -95,6 +95,10 @@ npm run p2mr mnemonic.json
   - Both P2TR and P2MR demos
 - [docs/DOCKER-QUICKSTART.md](docs/DOCKER-QUICKSTART.md) - Fast Docker setup reference
 - [docs/REGTEST-SETUP.md](docs/REGTEST-SETUP.md) - Detailed regtest configuration
+- **[BIP_360.pdf](BIP_360.pdf)** 📊 — Research slides on BIP-360 and P2MR
+  - Why BIP-360 (P2MR) was introduced
+  - Comparison with P2TR (BIP-341)
+  - Quantum resistance benefits
 - Comments in source files explain transaction building and BIP specifications
 
 ## 🏗️ How It Works
@@ -114,13 +118,16 @@ npm run p2mr mnemonic.json
   - Script-path spend: Reveals one script condition, hides others in Merkle tree
   - Supports BIP-342 TapScript for advanced spending conditions
 
-- **P2MR (BIP-360)** - Pay-to-Merkle-Root (Draft)
+- **P2MR (BIP-360)** - Pay-to-Merkle-Root (Draft) — [See BIP_360.pdf](BIP_360.pdf) for detailed research
   - **SegWit v2** (tb1z... addresses) — different from P2TR's SegWit v1
-  - Script-path only: No key-path spend available (quantum-resistant)
-  - Internal key never exposed on-chain (vs P2TR which reveals key in control block)
-  - Smaller control blocks (32 bytes saved per input vs P2TR)
+  - **Why BIP-360 was introduced:**
+    - Quantum-resistant: Script-path only (no key-path, internal key never exposed on-chain)
+    - Better privacy: Hides quantum-vulnerable key material vs P2TR control block leak
+    - Space efficient: 32 bytes saved per input control block vs P2TR
+    - Addresses P2TR limitations: While P2TR is excellent, it exposes internal key in control block during script-path spend
   - Currently draft status, not yet activated on mainnet
   - Educational reference for quantum-resistant Bitcoin protocols
+  - ⚠️ For detailed comparison and motivation, see [BIP_360.pdf](BIP_360.pdf)
 
 ## 🧪 Testing
 
