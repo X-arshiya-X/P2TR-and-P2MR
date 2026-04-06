@@ -282,10 +282,10 @@ npm run p2mr mnemonic.json
 - **Privacy**: No other scripts revealed on-chain
 - **Status**: Active on mainnet
 
-### P2MR (BIP-360)
-- **SegWit v2** (tb1z... addresses, experimental)
+### P2MR (BIP-360) - Proper SegWit v2
+- **SegWit v2** (tb1z... addresses)
 - **No key-path spend**: Only script-path available
-- **Quantum-resistant**: Internal key never exposed
+- **Quantum-resistant**: Internal key never exposed on-chain
 - **Control block**: Smaller than P2TR (no key, just proof)
 - **Status**: Draft, not yet activated
 

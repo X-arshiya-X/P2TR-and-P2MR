@@ -158,6 +158,52 @@ function _compactSize(n) {
   return buf;
 }
 
+// ─── P2MR Helper Functions (SegWit v2) ────────────────────────────────────────
+
+/**
+ * Create a P2MR scriptPubKey (SegWit version 2)
+ * Format: OP_2 (0x52) + PUSH32 + <merkle_root>
+ * @param {Buffer} merkleRoot – 32-byte Merkle root
+ * @returns {Buffer} P2MR scriptPubKey
+ */
+function createP2MRScriptPubKey(merkleRoot) {
+  if (merkleRoot.length !== 32) {
+    throw new Error("Merkle root must be 32 bytes");
+  }
+  // OP_2 (0x52) + PUSH32 (0x20) + merkle_root (32 bytes)
+  return Buffer.concat([Buffer.from([0x52, 0x20]), merkleRoot]);
+}
+
+/**
+ * Encode a P2MR address (SegWit v2)
+ * @param {Buffer} merkleRoot – 32-byte Merkle root
+ * @param {bitcoin.Network} network – Bitcoin network
+ * @returns {string} Bech32m-encoded address (tb1z... for testnet)
+ */
+function encodeP2MRAddress(merkleRoot, network) {
+  const scriptPubKey = createP2MRScriptPubKey(merkleRoot);
+  
+  // Extract witness version and program
+  const witnessVersion = scriptPubKey[0] - 0x50; // OP_2 = 0x52, so version = 2
+  const witnessProgram = scriptPubKey.slice(2); // Skip OP_2 and PUSH32
+  
+  // Use bech32m encoding for witness version 2+
+  // (different from bech32 for v0/v1)
+  const result = bitcoin.address.fromOutputScript(scriptPubKey, network);
+  return result;
+}
+
+/**
+ * Compute P2MR merkle root from a single script (leaf)
+ * For a single-leaf P2MR with no alternative branches
+ * @param {Buffer} script – Bitcoin script
+ * @returns {Buffer} 32-byte merkle root (which is the tap leaf hash for single leaf)
+ */
+function computeSingleLeafMerkleRoot(script) {
+  // For a single leaf, the merkle root IS the tap leaf hash
+  return tapLeafHash(script, 0xc0);
+}
+
 // ─── MerkleRootDirectWallet (Direct Spend) ────────────────────────────────────
 
 /**
@@ -192,42 +238,57 @@ class MerkleRootDirectWallet {
             .derive(0)
             .derive(0);
         
-        // Create P2TR (not P2MR) — this is a placeholder using taproot format
-        const pay = bitcoin.payments.p2tr({ 
-            internalPubkey: node.publicKey.subarray(1), 
-            network 
-        });
+        // P2MR: Single leaf merkle root (no key path, only script path)
+        // For direct wallet, use a simple OP_1 script as the only leaf
+        const singleLeafScript = Buffer.from([bitcoin.opcodes.OP_1]);
+        const merkleRoot = computeSingleLeafMerkleRoot(singleLeafScript);
+        const output = createP2MRScriptPubKey(merkleRoot);
+        
+        // Encode P2MR address (SegWit v2)
+        const address = encodeP2MRAddress(merkleRoot, network);
         
         this.network = network;
         this.isRpc = typeof mempoolOrRpc === 'object';
         this.mempool = this.isRpc ? null : mempoolOrRpc;
         this.rpc = this.isRpc ? mempoolOrRpc : null;
-        this.address = pay.address;
+        this.address = address;
         this.publicKey = node.publicKey;
         this.privateKey = node.privateKey;
         this.internalPubkey = node.publicKey.subarray(1);
-        this.output = pay.output;
+        this.output = output;
+        this.merkleRoot = merkleRoot;
+        this.leafScript = singleLeafScript;
     }
     
     /**
-     * Sign a PSBT using Schnorr signature
+     * Sign a PSBT using script-path spending (P2MR has NO key-path)
+     * Uses the OP_1 script (always succeeds)
      * @param {string} psbtHex – Unsigned PSBT hex
      * @returns {string} Signed transaction hex
      */
     signTransaction(psbtHex) {
         const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: this.network });
-        // Key-path taproot requires the *tweaked* private key (BIP-340/BIP-341)
-        let privKey = this.privateKey;
-        if (this.publicKey[0] === 3) {
-            privKey = ecc.privateNegate(privKey);
-        }
-        const tweak = bitcoin.crypto.taggedHash('TapTweak', this.internalPubkey);
-        const tweakedPrivKey = ecc.privateAdd(privKey, tweak);
-        const tweakedKeyPair = ECPair.fromPrivateKey(Buffer.from(tweakedPrivKey), { network: this.network });
+        
+        // P2MR script-path: witness = [OP_1 script, control block]
+        // OP_1 requires no signatures, so witness is [<empty>, leafScript, controlBlock]
         for (let i = 0; i < psbt.data.inputs.length; i++) {
-            psbt.signTaprootInput(i, tweakedKeyPair);
+            const input = psbt.data.inputs[i];
+            
+            // Control block for P2MR:
+            // - 1 byte: leaf version (0xc0 for tapscript) + 0 since no siblings
+            // - No merkle proof needed for single leaf
+            const controlBlock = Buffer.from([0xc0]);
+            
+            // Finalize with script-path witness: [empty arg, script, control]
+            psbt.finalizeInput(i, () => ({
+                finalScriptWitness: Buffer.concat([
+                    bitcoin.script.compile([Buffer.alloc(0)]),  // empty arg for OP_1
+                    bitcoin.script.compile([this.leafScript]),
+                    bitcoin.script.compile([controlBlock])
+                ])
+            }));
         }
-        psbt.finalizeAllInputs();
+        
         return psbt.extractTransaction().toHex();
     }
     
@@ -308,7 +369,6 @@ class MerkleRootScriptWallet {
             .derive(0);
         
         // Script 1: Standard P2PKH (OP_DUP OP_HASH160 <hash> OP_EQUALVERIFY OP_CHECKSIG)
-        //   Spendable by signing with the account's private key
         const pubkeyHash = bitcoin.crypto.hash160(node.publicKey);
         const script1 = bitcoin.script.compile([
             bitcoin.opcodes.OP_DUP,
@@ -319,7 +379,6 @@ class MerkleRootScriptWallet {
         ]);
         
         // Script 2: Hash-lock (OP_SHA256 <hash> OP_EQUAL)
-        //   Spendable by anyone who knows the preimage
         const preimage = Buffer.from("secret_preimage_123", "utf8");
         const scriptHash = bitcoin.crypto.sha256(preimage);
         const script2 = bitcoin.script.compile([
@@ -329,7 +388,6 @@ class MerkleRootScriptWallet {
         ]);
         
         // Script 3: Time-lock (OP_CHECKLOCKTIMEVERIFY OP_DROP)
-        //   Spendable after a specific block height
         const script3 = bitcoin.script.compile([
             bitcoin.script.number.encode(500),
             bitcoin.opcodes.OP_CHECKLOCKTIMEVERIFY,
@@ -337,53 +395,85 @@ class MerkleRootScriptWallet {
             bitcoin.opcodes.OP_0
         ]);
         
-        // Construct Merkle tree:
-        //           script1
-        //         /        \
-        //     script2      script3
-        const scriptTree = { 
-            output: script1, 
-            left: { output: script2 },
-            right: { output: script3 }
-        };
+        // Compute P2MR merkle root from script tree:
+        //           root
+        //         /      \
+        //     leaf1       branch
+        //              /         \
+        //           leaf2      leaf3
+        const leaf1 = tapLeafHash(script1, 0xc0);
+        const leaf2 = tapLeafHash(script2, 0xc0);
+        const leaf3 = tapLeafHash(script3, 0xc0);
+        const branch = tapBranchHash(leaf2, leaf3);
+        const merkleRoot = tapBranchHash(leaf1, branch);
         
-        // Create P2TR with the script tree (this is placeholder; actual P2MR would use SegWit v2)
-        const taproot = bitcoin.payments.p2tr({
-            internalPubkey: node.publicKey.subarray(1),
-            scriptTree: scriptTree,
-            network
-        });
+        // Create P2MR scriptPubKey (SegWit v2)
+        const output = createP2MRScriptPubKey(merkleRoot);
+        
+        // Encode P2MR address
+        const address = encodeP2MRAddress(merkleRoot, network);
         
         this.network = network;
         this.isRpc = typeof mempoolOrRpc === 'object';
         this.mempool = this.isRpc ? null : mempoolOrRpc;
         this.rpc = this.isRpc ? mempoolOrRpc : null;
-        this.address = taproot.address;
+        this.address = address;
         this.publicKey = node.publicKey;
         this.privateKey = node.privateKey;
         this.internalPubkey = node.publicKey.subarray(1);
-        this.output = taproot.output;
+        this.output = output;
         this.script1 = script1;
         this.script2 = script2;
         this.script3 = script3;
-        this.scriptTree = scriptTree;
+        this.merkleRoot = merkleRoot;
         this.preimage = preimage;
+        // Store leaf hashes for witness stack construction
+        this.leaf1 = leaf1;
+        this.leaf2 = leaf2;
+        this.leaf3 = leaf3;
+        this.branch = branch;
     }
     
     /**
-     * Sign a PSBT using script-path spending
+     * Sign a PSBT using script-path spending (P2MR approach)
+     * Uses script1 (P2PKH) with standard ECDSA signature
      * @param {string} psbtHex – Unsigned PSBT hex
-     * @param {number} scriptIndex – Which script in tree to use (default 0)
+     * @param {number} scriptIndex – Which script to use (default 0 = script1)
      * @returns {string} Signed transaction hex
      */
     signTransaction(psbtHex, scriptIndex = 0) {
         const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: this.network });
+        const keyPair = ECPair.fromPrivateKey(this.privateKey, { network: this.network });
+        
         for (let i = 0; i < psbt.data.inputs.length; i++) {
-            const keyPair = ECPair.fromPrivateKey(this.privateKey, { network: this.network });
-            // Pass scriptTree to enable script-path signing
-            psbt.signInput(i, keyPair, undefined, 0x81, this.scriptTree);
+            const input = psbt.data.inputs[i];
+            
+            // Sign with the private key (standard ECDSA for P2PKH script)
+            const sig = keyPair.sign(psbt.hashForSignAll(i, this.script1, Buffer.from([0xc1])));
+            const sigPushData = bitcoin.script.signature.encode(sig, bitcoin.Transaction.SIGHASH_ALL);
+            
+            // Construct control block for P2MR with merkle proof
+            // leaf1 is in the tree with sibling = hash(leaf2, leaf3)
+            // Control block: [leaf_version (0xc0)] + [merkle_proof]
+            // merkle_proof includes the branch hash (32 bytes)
+            const controlBlock = Buffer.concat([
+                Buffer.from([0xc0]),  // leaf version
+                this.branch           // merkle proof: the branch containing leaf2-leaf3
+            ]);
+            
+            // P2MR witness stack for script1 (P2PKH):
+            // [sig, pubkey, script1, controlBlock]
+            psbt.finalizeInput(i, () => ({
+                finalScriptWitness: bitcoin.script.compile([
+                    sigPushData,
+                    this.publicKey,
+                    this.script1,
+                    controlBlock
+                ])
+            }));
         }
-        return psbt.toHex();
+        
+        return psbt.extractTransaction().toHex();
     }
     
     /**
